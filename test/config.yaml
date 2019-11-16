@@ -1,0 +1,8 @@
+parameters:
+    Nfibs: 3
+    Nfibs_calc: 32
+    gamma: 5.0
+    L: 0.01
+properties:
+    cl_device_type: "GPU"
+    cl_device_number: 0

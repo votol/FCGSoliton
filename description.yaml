@@ -4,28 +4,30 @@ general:
   #name of the project, required for searching this project in the whole library
   name: FCGSoliton
   description: |
-    here goes sample description
+    This project is a calculation programm to numericaly investigate 
+    qunatum solitons present in onedimensional array of singlemode  
+    waveguides with cubic nonlinearity. The evolution of quantum properties  
+    of light is described via a set of nonlinear ordinary differential equations
+    obtaind in Gaussion approximation for quantum state of light.
 parameters:
-  #parameters are double named numbers which influence on result of calculation
-  #parameters are defined as a list of maps with two fields: name , description
-  - name: sample_parameter
-    description: this is a sample parameter
-  - name: another_parameter
-    description: another sample parameter
+  - name: Nfibs
+    description: number of waveguides in the array
+  - name: Nfibs_calc
+    description: size of waveguides subarray near the central one, for which will be calculated logarithmic negativity (for each pair in subarray)
+  - name: L
+    description: nonlinearity coefficient
+  - name: gamma
+    description: parameter which defines classic soliton profile used as initial state
 properties:
-  #properties are values which influence the calculation process but not the result 
-  #(except some accuracy issues)
-  #ccs introduce two default properties: output_path, and tmp_path
-  #output_path - the destination, where to put the result .nc file
-  #tmp_path - folder where could be placed some tmp files. ccs will check for this folder and delete it after the work finished (with success or failure)
-  #you should not redefine this properties
-  #Here should go the list of items, each of which describes single property
-  - name: sample_property
+  - name: cl_device_type # this property should take two values GPU or CPU
+    optional: true # a boolean property which shows if this property is required for calculation. Default: false 
+    list: false #flag to show that if need to set a list of properties here. Default: false
+    type: string #shows the type of the property: currently we support only int, string, float, boolean  
+  - name: cl_device_number
     optional: true # a boolean property which shows if this property is required for calculation. Default: false 
     list: false #flag to show that if need to set a list of properties here. Default: false
     type: int #shows the type of the property: currently we support only int, string, float, boolean  
 outputs:
-  #a list of outputs which calculator will generate. Should be defined as a list of items
-  - name: sample_output
-    description: this is an example of output item
+  - name: I
+    description: the stationary solution, first Nfibs values - alpha_n, next Nfibs * Nfibs - <a^{\dag}_n a_m>, last Nfibs * Nfibs - <a_n a_m>
 

@@ -7,6 +7,11 @@ import sys
 import os
 import numpy as np
 import math
+import socket
+import time
+from netCDF4 import Dataset
+
+
 
 work_dir = os.path.dirname(os.path.realpath(__file__))
 yaml = ruamel.yaml.YAML()
@@ -35,30 +40,132 @@ def iterate_fun(iter_par, iter_x):
 
 def init_fun(num, init_param):
     param_tmp = np.sqrt(2 * init_param )
-    return 1.0*np.sign(num - int(N_par / 2)-0.5) * param_tmp / (np.sqrt(L) * np.cosh((num - int(N_par / 2)-0.5) * param_tmp))
+    return 1.0*param_tmp / (np.sqrt(L) * np.cosh((num - int(N_par / 2)) * param_tmp))
 
 
 gamma = 5.0
-cur_x = np.fromfunction(init_fun, (N_par,), dtype=float, init_param=gamma)
+init_x = np.fromfunction(init_fun, (N_par,), dtype=float, init_param=gamma)
 
-#while True:
-#    while True:
-#        tmp_x = iterate_fun(gamma, cur_x)
-#        delta_x = np.max(np.abs(cur_x - tmp_x)) / np.max(cur_x)
-#        cur_x = tmp_x
-#        if delta_x < 1e-5 and np.max(np.abs(fun(gamma, cur_x))) < 1e-5:
-#            break
-#    if gamma == gamma_result:
-#        break
-#    
-#    if abs(gamma - gamma_result) < 0.1:
-#        gamma = gamma_result
-#    else:
-#        gamma += 0.1* math.copysign(1, gamma_result - gamma)
+while True:
+    while True:
+        tmp_x = iterate_fun(gamma, init_x)
+        delta_x = np.max(np.abs(init_x - tmp_x)) / np.max(init_x)
+        init_x = tmp_x
+        if delta_x < 1e-5 and np.max(np.abs(fun(gamma, init_x))) < 1e-5:
+            break
+    if gamma == gamma_result:
+        break
+    
+    if abs(gamma - gamma_result) < 0.1:
+        gamma = gamma_result
+    else:
+        gamma += 0.1* math.copysign(1, gamma_result - gamma)
 
 
-print(cur_x)
-cur_x.tofile(tmp_path + "/init.bin")
+def make_matrix(m_init, gam):
+    N = len(m_init)
+    def alph(n):
+        return n
+    def norm(n,m):
+        return N + n * N + m
+    def anom(n,m):
+        return N + N * N + n * N + m
+    t_dim = N + 2 * N * N
+    result = np.zeros((t_dim, t_dim,), dtype= np.float64)
+    for ind in range(N):
+        result[alph(ind), alph(ind)] += -gam + 3 * m_init[alph(ind)] * m_init[alph(ind)]  
+        result[alph(ind), norm(ind, ind)] += 2 * m_init[alph(ind)]
+        result[alph(ind), anom(ind, ind)] += m_init[alph(ind)]
+        if ind != 0:
+            result[alph(ind), alph(ind - 1)] += 1.0
+        if ind != N - 1:
+            result[alph(ind), alph(ind + 1)] += 1.0
+        
+    for ind1 in range(N):
+        for ind2 in range(N):
+            if ind1 != 0:
+                result[norm(ind1, ind2), norm(ind1 - 1, ind2)] += -1.0
+            if ind1 != N -1:
+                result[norm(ind1, ind2), norm(ind1 + 1, ind2)] += -1.0
+            if ind2 != 0:
+                result[norm(ind1, ind2), norm(ind1, ind2 - 1)] += 1.0
+            if ind2 != N -1:
+                result[norm(ind1, ind2), norm(ind1, ind2 + 1)] += 1.0
+                
+            result[norm(ind1, ind2), norm(ind1, ind2)] += 2.0 * (m_init[alph(ind2)] * m_init[alph(ind2)] - m_init[alph(ind1)] * m_init[alph(ind1)] )
+            result[norm(ind1, ind2), anom(ind1, ind2)] += 1.0 * (m_init[alph(ind2)] * m_init[alph(ind2)] - m_init[alph(ind1)] * m_init[alph(ind1)] )
+    
+    for ind1 in range(N):
+        for ind2 in range(N):
+            if ind1 != 0:
+                result[anom(ind1, ind2), anom(ind1 - 1, ind2)] += 1.0
+            if ind1 != N -1:
+                result[anom(ind1, ind2), anom(ind1 + 1, ind2)] += 1.0
+            if ind2 != 0:
+                result[anom(ind1, ind2), anom(ind1, ind2 - 1)] += 1.0
+            if ind2 != N -1:
+                result[anom(ind1, ind2), anom(ind1, ind2 + 1)] += 1.0
+                
+            result[anom(ind1, ind2), anom(ind1, ind2)] += 2.0 * (m_init[alph(ind2)] * m_init[alph(ind2)] + m_init[alph(ind1)] * m_init[alph(ind1)] ) - 2 * gam
+            result[anom(ind1, ind2), norm(ind1, ind2)] += 1.0 * (m_init[alph(ind2)] * m_init[alph(ind2)] + m_init[alph(ind1)] * m_init[alph(ind1)] )
+    
+    return result
 
+def make_vec(m_init):
+    N = len(m_init)
+    def alph(n):
+        return n
+    def norm(n,m):
+        return N + n * N + m
+    def anom(n,m):
+        return N + N * N + n * N + m
+    t_dim = N + 2 * N * N
+    result = np.zeros((t_dim, ), dtype= np.float64)
+    for ind in range(N):
+        result[anom(ind,ind)] += - m_init[alph(ind)] * m_init[alph(ind)]
+    
+    return result
+
+cur_x = np.zeros((N_par + 2 * N_par * N_par), dtype = np.float64)
+cur_x[:N_par] = init_x * np.sqrt(L)
+matr = make_matrix(init_x * np.sqrt(L), gamma)
+vec = L * make_vec(init_x * np.sqrt(L))
+cur_x += np.linalg.solve(matr, vec)
+#print(cur_x[:N_par])
+#for ind in range( 2 * N_par):
+#    print(cur_x[((ind + 1) * N_par):((ind + 2) * N_par)])
+
+#exit()
+SOCKET_FILE = tmp_path + '/socket'
+if os.path.exists(SOCKET_FILE):
+    os.remove(SOCKET_FILE)
 proc = subprocess.Popen([work_dir+"/CalcProj_c++", sys.argv[1]])
+
+while not os.path.exists(SOCKET_FILE):
+    time.sleep(1)
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+client.connect(SOCKET_FILE)
+for ind in range(10000):
+    cur_x.tofile(tmp_path + "/init.bin")
+    client.send('asdf'.encode('utf-8'))
+    data = client.recv(1)
+    rootgrp = Dataset(tmp_path + "/tmp.nc", "r", format="NETCDF4")
+    func_vec = np.array(rootgrp.variables['vector'])
+    grad_matrix = np.array(rootgrp.variables['matrix'])
+    rootgrp.close()
+    if ind %10 == 0:
+        print(np.max(np.abs(func_vec)))
+    
+    if (ind + 1)%100 == 110:
+        cur_x += 2.0 * np.linalg.solve(grad_matrix.T, -func_vec)
+    else:
+        tmp_matr = grad_matrix * np.outer(np.ones((len(func_vec),)), func_vec)
+        tmp_vec = np.sum(tmp_matr, axis = 1)
+        cur_x -= 0.01 * tmp_vec
+    #cur_x += 0.1 * np.linalg.solve(grad_matrix.T, -func_vec)
+    #cur_x -= np.matmul(np.linalg.inv(grad_matrix.T), func_vec)
+
+print(cur_x[:N_par])
+client.send('exit'.encode('utf-8'))
+client.close()
 result = proc.wait()

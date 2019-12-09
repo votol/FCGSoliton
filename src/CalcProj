@@ -21,6 +21,7 @@ config = yaml.load(yaml_stream)
 yaml_stream.close()
 
 tmp_path = config["properties"]["tmp_path"]
+result_file = config["properties"]["output_path"] + "/output.nc"
 N_par = int(config["parameters"]["Nfibs"])
 gamma_result = abs(float(config["parameters"]["gamma"]))
 L = abs(float(config["parameters"]["L"]))
@@ -126,7 +127,8 @@ def make_vec(m_init):
     
     return result
 
-cur_x = np.zeros((N_par + 2 * N_par * N_par), dtype = np.float64)
+dim = N_par + 2 * N_par * N_par
+cur_x = np.zeros((dim,), dtype = np.float64)
 cur_x[:N_par] = init_x * np.sqrt(L)
 matr = make_matrix(init_x * np.sqrt(L), gamma)
 vec = L * make_vec(init_x * np.sqrt(L))
@@ -136,36 +138,82 @@ cur_x += np.linalg.solve(matr, vec)
 #    print(cur_x[((ind + 1) * N_par):((ind + 2) * N_par)])
 
 #exit()
-SOCKET_FILE = tmp_path + '/socket'
-if os.path.exists(SOCKET_FILE):
-    os.remove(SOCKET_FILE)
-proc = subprocess.Popen([work_dir+"/CalcProj_c++", sys.argv[1]])
-
-while not os.path.exists(SOCKET_FILE):
-    time.sleep(1)
-client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-client.connect(SOCKET_FILE)
-for ind in range(10000):
-    cur_x.tofile(tmp_path + "/init.bin")
-    client.send('asdf'.encode('utf-8'))
-    data = client.recv(1)
-    rootgrp = Dataset(tmp_path + "/tmp.nc", "r", format="NETCDF4")
-    func_vec = np.array(rootgrp.variables['vector'])
-    grad_matrix = np.array(rootgrp.variables['matrix'])
-    rootgrp.close()
-    if ind %10 == 0:
-        print(np.max(np.abs(func_vec)))
+def calc_loop(m_tmp_path):
+    global cur_x
+    coe = 0.01
+    SOCKET_FILE = m_tmp_path + '/socket'
+    if os.path.exists(SOCKET_FILE):
+        os.remove(SOCKET_FILE)
+    proc = subprocess.Popen([work_dir+"/CalcProj_c++", m_tmp_path + "/config.yaml"])
     
-    if (ind + 1)%100 == 110:
-        cur_x += 2.0 * np.linalg.solve(grad_matrix.T, -func_vec)
-    else:
-        tmp_matr = grad_matrix * np.outer(np.ones((len(func_vec),)), func_vec)
-        tmp_vec = np.sum(tmp_matr, axis = 1)
-        cur_x -= 0.01 * tmp_vec
-    #cur_x += 0.1 * np.linalg.solve(grad_matrix.T, -func_vec)
-    #cur_x -= np.matmul(np.linalg.inv(grad_matrix.T), func_vec)
+    while not os.path.exists(SOCKET_FILE):
+        time.sleep(1)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.connect(SOCKET_FILE)
+    old_x = cur_x
+    old_grad = None
+    for ind in range(10000):
+        cur_x.tofile(m_tmp_path + "/init.bin")
+        client.send('asdf'.encode('utf-8'))
+        data = client.recv(1)
+        rootgrp = Dataset(m_tmp_path + "/tmp.nc", "r", format="NETCDF4")
+        func_vec = np.array(rootgrp.variables['vector'])
+        grad_matrix = np.array(rootgrp.variables['matrix'])
+        rootgrp.close()
+        if np.max(np.abs(func_vec)) < 2e-9:
+            break
+        if ind %100 == 0:
+            print(np.max(np.abs(func_vec)))
+        
+        if (ind + 1)%100 == 110:
+            cur_x += 2.0 * np.linalg.solve(grad_matrix.T, -func_vec)
+        else:
+            tmp_matr = grad_matrix * np.outer(np.ones((len(func_vec),)), func_vec)
+            tmp_vec = np.sum(tmp_matr, axis = 1)
+            if old_grad is not None:
+                delt_x = cur_x - old_x
+                delt_grad = tmp_vec - old_grad
+                coe = np.abs(np.inner(delt_x, delt_grad) )/ np.inner(delt_grad,delt_grad)
+            
+            old_x = cur_x.copy()
+            old_grad = tmp_vec.copy()
+            
+            #print("coe : " + str(coe))
+            if math.isnan(coe):
+                raise RuntimeError("we have went to NaNs. ")
+            cur_x -= coe * tmp_vec
+            
+            
+        #cur_x += 0.1 * np.linalg.solve(grad_matrix.T, -func_vec)
+        #cur_x -= np.matmul(np.linalg.inv(grad_matrix.T), func_vec)
+    print(np.max(np.abs(func_vec)))
+    print(cur_x[:N_par])
+    client.send('exit'.encode('utf-8'))
+    client.close()
+    proc.wait()
 
-print(cur_x[:N_par])
-client.send('exit'.encode('utf-8'))
-client.close()
-result = proc.wait()
+calc_count = 73
+L_array = np.zeros((calc_count), dtype = np.float64)
+res = np.zeros((calc_count, dim), dtype = np.float64)
+
+for ind in range(calc_count):
+    config["parameters"]["L"] = L
+    with open(tmp_path + "/config.yaml", "w") as outfile:
+            yaml.dump(config, outfile)
+
+    print("start calculating L = {0}".format(L))
+    sys.stdout.flush()
+    calc_loop(tmp_path)
+    L_array[ind] = L
+    res[ind, :] = cur_x
+    L *= 1.1
+
+ncdf = Dataset(result_file, "w", format="NETCDF4")
+nc_dim0 = ncdf.createDimension('IL_count', calc_count)
+nc_dim1 = ncdf.createDimension('Ifibs_count', dim)
+L_nc = ncdf.createVariable('L', 'f8', ('IL_count'))
+res_nc = ncdf.createVariable('I', 'f8', ('IL_count', 'Ifibs_count'))
+L_nc[:] = L_array
+res_nc[:] = res
+ncdf.close()
+
